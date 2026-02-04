@@ -6,8 +6,26 @@ A web interface for the CrewAI-powered job search and resume optimization system
 import streamlit as st
 from dotenv import load_dotenv
 import os
+from pypdf import PdfReader
 
 from job_crew import create_crew
+
+
+def get_pdf_text(uploaded_file) -> str:
+    """
+    Extract text content from an uploaded PDF file.
+
+    Args:
+        uploaded_file: Streamlit UploadedFile object
+
+    Returns:
+        Extracted text from all pages of the PDF
+    """
+    text = ""
+    pdf_reader = PdfReader(uploaded_file)
+    for page in pdf_reader.pages:
+        text += page.extract_text() or ""
+    return text
 
 # Load environment variables
 load_dotenv()
@@ -122,20 +140,19 @@ with col1:
 
     st.subheader("📄 Your Resume")
 
-    resume_text = st.text_area(
-        "Paste your resume content here",
-        height=400,
-        placeholder="""Paste your resume here. Include:
-- Professional summary
-- Work experience
-- Skills
-- Education
-- Certifications
-- Projects
-
-The more detailed, the better the analysis!""",
-        help="Paste your complete resume text for analysis",
+    uploaded_file = st.file_uploader(
+        "Upload your resume (PDF)",
+        type=["pdf"],
+        help="Upload your resume in PDF format for analysis",
     )
+
+    # Extract text from PDF and show confirmation
+    resume_text = ""
+    if uploaded_file is not None:
+        resume_text = get_pdf_text(uploaded_file)
+        st.success(f"✅ Resume Loaded: {uploaded_file.name}")
+        with st.expander("Preview extracted text"):
+            st.text(resume_text[:2000] + "..." if len(resume_text) > 2000 else resume_text)
 
 with col2:
     st.subheader("🚀 Results")
@@ -154,7 +171,7 @@ with col2:
         elif not job_topic:
             st.error("❌ Please enter a job title or topic.")
         elif not resume_text:
-            st.error("❌ Please paste your resume content.")
+            st.error("❌ Please upload your resume PDF.")
         else:
             # Run the crew
             with st.spinner("🤖 Agents are working... This may take a few minutes."):
