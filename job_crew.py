@@ -1,12 +1,75 @@
 """
 Multi-Agent Job Search System using CrewAI
 This module defines the agents, tasks, and crew for job searching and resume analysis.
+Includes deep scraping capabilities for extracting full job posting content.
 """
 
 import os
+import logging
 from crewai import Agent, Task, Crew, Process
-from crewai_tools import SerperDevTool
+from crewai_tools import SerperDevTool, ScrapeWebsiteTool
 from langchain_google_genai import ChatGoogleGenerativeAI
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+
+class SafeScrapeWebsiteTool(ScrapeWebsiteTool):
+    """
+    A wrapper around ScrapeWebsiteTool with built-in error handling.
+    Gracefully handles blocked websites and returns fallback data.
+    """
+
+    def _run(self, website_url: str) -> str:
+        """
+        Scrape website with error handling for blocked/failed requests.
+
+        Args:
+            website_url: The URL to scrape
+
+        Returns:
+            Scraped content or fallback message
+        """
+        try:
+            logger.info(f"Attempting to scrape: {website_url}")
+            result = super()._run(website_url)
+
+            if result and len(result) > 100:
+                logger.info(f"Successfully scraped {len(result)} characters from {website_url}")
+                return result
+            else:
+                logger.warning(f"Minimal content returned from {website_url}")
+                return self._fallback_message(website_url, "minimal content")
+
+        except Exception as e:
+            error_msg = str(e).lower()
+            logger.error(f"Scraping failed for {website_url}: {e}")
+
+            # Handle specific error types
+            if "403" in error_msg or "forbidden" in error_msg:
+                return self._fallback_message(website_url, "access forbidden (403)")
+            elif "404" in error_msg or "not found" in error_msg:
+                return self._fallback_message(website_url, "page not found (404)")
+            elif "timeout" in error_msg:
+                return self._fallback_message(website_url, "connection timeout")
+            elif "ssl" in error_msg or "certificate" in error_msg:
+                return self._fallback_message(website_url, "SSL certificate error")
+            else:
+                return self._fallback_message(website_url, f"error: {str(e)[:100]}")
+
+    def _fallback_message(self, url: str, reason: str) -> str:
+        """Generate a fallback message when scraping fails."""
+        return f"""
+[SCRAPING NOTICE]
+URL: {url}
+Status: Could not fully scrape this page ({reason})
+Action: Using search snippet data instead. Continue analysis with available information.
+
+Note: Some job boards block automated access. The search results still contain
+valuable information about this position. Proceed with the analysis using the
+job title, company name, and requirements from the search snippets.
+"""
 
 
 def create_crew(
@@ -17,6 +80,7 @@ def create_crew(
     work_type: str = "Any",
     salary_range: str = "Not specified",
     experience_level: str = "Any",
+    deep_search: bool = False,
 ) -> dict:
     """
     Create and run a CrewAI crew for job searching and resume optimization.
@@ -29,6 +93,7 @@ def create_crew(
         work_type: Preferred work arrangement (Remote/Hybrid/On-site/Any)
         salary_range: Expected salary range
         experience_level: Experience level (Entry/Mid/Senior/Any)
+        deep_search: Enable deep scraping of job posting URLs for detailed analysis
 
     Returns:
         Dictionary containing structured results from each task
@@ -47,6 +112,15 @@ def create_crew(
     # Initialize tools
     search_tool = SerperDevTool()
 
+    # Configure tools based on search depth
+    researcher_tools = [search_tool]
+
+    if deep_search:
+        # Add scraping tool for deep search mode
+        scrape_tool = SafeScrapeWebsiteTool()
+        researcher_tools.append(scrape_tool)
+        logger.info("Deep search enabled: Scraping tool activated")
+
     # Build preferences string for search context
     preferences = f"""
     Candidate Preferences:
@@ -55,20 +129,62 @@ def create_crew(
     - Experience Level: {experience_level}
     """
 
+    # Deep search instructions
+    deep_search_instructions = ""
+    if deep_search:
+        deep_search_instructions = """
+
+    DEEP SEARCH MODE ENABLED:
+    You have access to the ScrapeWebsiteTool. For each promising job posting:
+    1. Use the scrape tool to visit the actual job posting URL
+    2. Extract the FULL job description including:
+       - Complete list of required skills and technologies
+       - Company culture and values
+       - Benefits and perks mentioned
+       - Team structure and reporting lines
+       - Specific project or product details
+       - Hidden requirements not in the snippet
+    3. If a website blocks scraping (403 error or similar), gracefully continue
+       using the search snippet data - DO NOT let this stop your research
+    4. Pass ALL scraped content to subsequent agents for deeper analysis
+
+    FALLBACK BEHAVIOR:
+    - If scraping fails, use the search result snippets
+    - Never report an error to the user for blocked sites
+    - Continue with available data and note which sources were limited
+    """
+
     # ========== DEFINE AGENTS ==========
 
-    # Agent 1: Job Researcher
-    researcher = Agent(
-        role="Senior Job Market Researcher",
-        goal=f"Find the best {work_type.lower()} job opportunities for {topic} positions matching candidate preferences",
-        backstory="""You are an expert job market researcher with 15+ years of experience
+    # Agent 1: Job Researcher (Enhanced with scraping capabilities)
+    researcher_backstory = """You are an expert job market researcher with 15+ years of experience
         in talent acquisition and job market analysis. You have deep connections across
         LinkedIn, Indeed, Glassdoor, and niche job boards. You specialize in identifying
         both well-known opportunities at top companies and hidden gems at growing startups.
         You understand salary benchmarks, market trends, and what makes a job posting
         legitimate and worthwhile. You always verify job details and prioritize positions
-        that match the candidate's stated preferences for work arrangement and compensation.""",
-        tools=[search_tool],
+        that match the candidate's stated preferences for work arrangement and compensation."""
+
+    if deep_search:
+        researcher_backstory += """
+
+        ADVANCED CAPABILITY: You are equipped with web scraping tools that allow you to
+        read the FULL content of job posting pages. This gives you access to:
+        - Complete job descriptions beyond search snippets
+        - Hidden requirements and "nice-to-haves"
+        - Company culture information
+        - Detailed tech stack specifications
+        - Benefits and compensation details
+
+        When you find a relevant job URL, use your scraping tool to extract the complete
+        posting. If a site blocks access, gracefully fall back to using search data."""
+
+    researcher = Agent(
+        role="Senior Job Market Researcher" + (" & Web Intelligence Specialist" if deep_search else ""),
+        goal=f"Find the best {work_type.lower()} job opportunities for {topic} positions matching candidate preferences"
+             + (" and extract full job details using web scraping" if deep_search else ""),
+        backstory=researcher_backstory,
+        tools=researcher_tools,
         llm=llm,
         verbose=True,
         allow_delegation=False,
@@ -96,7 +212,11 @@ def create_crew(
         4. COMPETITIVE POSITIONING: You understand what makes a candidate stand out
            and what red flags recruiters look for.
 
-        You are brutally honest in your assessments because you want candidates to succeed.""",
+        You are brutally honest in your assessments because you want candidates to succeed.
+
+        IMPORTANT: When analyzing job requirements, use ALL available information including
+        any scraped full job descriptions provided by the Researcher. The more detailed
+        the job posting data, the more precise your keyword analysis will be.""",
         llm=llm,
         verbose=True,
         allow_delegation=False,
@@ -118,7 +238,11 @@ def create_crew(
         - LinkedIn profile optimization for recruiter visibility
 
         You always deliver your work in a clean, professional, well-structured format
-        using proper Markdown formatting for easy reading and implementation.""",
+        using proper Markdown formatting for easy reading and implementation.
+
+        IMPORTANT: Leverage ALL job details provided, including scraped content with
+        company culture, values, and specific requirements. Tailor cover letters to
+        mention specific details that show you've researched the company thoroughly.""",
         llm=llm,
         verbose=True,
         allow_delegation=False,
@@ -126,11 +250,11 @@ def create_crew(
 
     # ========== DEFINE TASKS ==========
 
-    # Task 1: Search for Jobs
-    search_task = Task(
-        description=f"""Search for the latest job opportunities related to: {topic}
+    # Task 1: Search for Jobs (Enhanced with deep search capabilities)
+    search_task_description = f"""Search for the latest job opportunities related to: {topic}
 
         {preferences}
+        {deep_search_instructions}
 
         Your task:
         1. Search for current job openings for {topic} positions
@@ -143,13 +267,24 @@ def create_crew(
            - Key requirements and qualifications (list ALL mentioned skills)
            - Required years of experience
            - Salary range (if available)
-           - Application URL or platform
+           - Application URL or platform"""
+
+    if deep_search:
+        search_task_description += """
+           - FULL JOB DESCRIPTION (from scraped content)
+           - Company culture and values (if available)
+           - Tech stack details (specific versions, frameworks)
+           - Team information and growth opportunities
+           - Benefits and perks mentioned"""
+
+    search_task_description += f"""
         5. Identify the TOP 3 most promising opportunities based on candidate preferences
         6. List ALL unique technical skills and tools mentioned across all postings
 
         Focus on jobs from reputable companies. Prioritize positions matching the
-        candidate's work type preference: {work_type}.""",
-        expected_output="""A structured job search report in this EXACT format:
+        candidate's work type preference: {work_type}."""
+
+    expected_output_jobs = """A structured job search report in this EXACT format:
 
 ## Job Opportunities Found
 
@@ -159,6 +294,16 @@ def create_crew(
 - **Skills Needed**: [Comma-separated list]
 - **Experience**: [X years]
 - **Salary**: [Range if available]
+- **URL**: [Job posting URL]"""
+
+    if deep_search:
+        expected_output_jobs += """
+- **Full Description**: [Scraped content summary - key details]
+- **Company Culture**: [Values, work environment details]
+- **Tech Stack**: [Detailed technologies with versions if available]
+- **Scrape Status**: [Success/Fallback to snippet]"""
+
+    expected_output_jobs += """
 
 [Repeat for all 5-7 jobs]
 
@@ -171,7 +316,19 @@ def create_crew(
 - Technical Skills: [List]
 - Soft Skills: [List]
 - Tools/Platforms: [List]
-- Certifications: [List if any]""",
+- Certifications: [List if any]"""
+
+    if deep_search:
+        expected_output_jobs += """
+
+## Deep Search Insights
+- **Hidden Requirements Found**: [Skills only visible in full descriptions]
+- **Common Company Values**: [Culture themes across postings]
+- **Scraping Summary**: [X/Y sites successfully scraped]"""
+
+    search_task = Task(
+        description=search_task_description,
+        expected_output=expected_output_jobs,
         agent=researcher,
     )
 
@@ -205,6 +362,8 @@ def create_crew(
            - Exact phrases to add to resume
            - Skills to learn/acquire
            - Certifications that would boost candidacy
+
+        {"5. Use the FULL scraped job descriptions for more accurate keyword matching" if deep_search else ""}
 
         Be specific and data-driven in your analysis.""",
         expected_output="""A detailed analysis report in this EXACT format:
@@ -267,6 +426,7 @@ def create_crew(
            - Highlights matching skills from analysis
            - Addresses gaps positively
            - Under 350 words, compelling narrative
+           {"- Reference specific company values/culture from scraped data" if deep_search else ""}
 
         3. OPTIMIZED RESUME BULLETS
            - 7-10 powerful bullet points
@@ -278,6 +438,7 @@ def create_crew(
            - 5 likely interview questions based on job requirements
            - Suggested answers incorporating candidate's experience
            - Key talking points
+           {"- Company-specific questions based on scraped culture info" if deep_search else ""}
 
         5. LINKEDIN OPTIMIZATION
            - Suggested headline (120 chars max)
@@ -366,7 +527,9 @@ def create_crew(
     )
 
     # Execute the crew
+    logger.info(f"Starting crew execution (deep_search={deep_search})")
     result = crew.kickoff()
+    logger.info("Crew execution completed")
 
     # Return structured results
     return {
@@ -374,4 +537,5 @@ def create_crew(
         "analysis": str(analyze_task.output) if analyze_task.output else "",
         "documents": str(write_task.output) if write_task.output else "",
         "full_report": str(result),
+        "deep_search_enabled": deep_search,
     }

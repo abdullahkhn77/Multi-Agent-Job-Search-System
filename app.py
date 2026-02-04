@@ -421,6 +421,36 @@ with st.sidebar:
 
     st.markdown("---")
 
+    # Depth of Search Section
+    st.subheader("🔬 Search Depth")
+
+    search_depth = st.radio(
+        "Analysis Mode",
+        options=["Simple", "Deep"],
+        index=0,
+        help="Deep mode scrapes full job postings for more detailed analysis",
+        horizontal=True,
+    )
+
+    deep_search = search_depth == "Deep"
+
+    if deep_search:
+        st.info(
+            "🔍 **Deep Search Enabled**\n\n"
+            "• Scrapes full job posting pages\n"
+            "• Extracts hidden requirements\n"
+            "• Finds company culture details\n"
+            "• More accurate keyword matching\n\n"
+            "⚠️ Takes longer to complete"
+        )
+    else:
+        st.caption(
+            "💡 Simple mode uses search snippets. "
+            "Enable Deep mode for comprehensive analysis."
+        )
+
+    st.markdown("---")
+
     # Search History Section
     st.subheader("📜 Search History")
 
@@ -519,6 +549,7 @@ with col1:
     with pref_col1:
         st.markdown(f"**Role:** {job_topic or 'Not specified'}")
         st.markdown(f"**Work Type:** {work_type}")
+        st.markdown(f"**Search Depth:** {'🔬 Deep' if deep_search else '⚡ Simple'}")
     with pref_col2:
         st.markdown(f"**Experience:** {experience_level}")
         st.markdown(f"**Salary:** {salary_range}")
@@ -547,7 +578,14 @@ with col2:
                 try:
                     # Progress indicators
                     progress_placeholder = st.empty()
-                    progress_placeholder.info("🔍 **Stage 1/3**: Researcher is searching for jobs...")
+                    if deep_search:
+                        progress_placeholder.info(
+                            "🔬 **Deep Search Mode**\n\n"
+                            "Stage 1/3: Researcher is searching and scraping job postings...\n\n"
+                            "This may take longer as we extract full job descriptions."
+                        )
+                    else:
+                        progress_placeholder.info("🔍 **Stage 1/3**: Researcher is searching for jobs...")
 
                     result = create_crew(
                         topic=job_topic,
@@ -557,6 +595,7 @@ with col2:
                         work_type=work_type,
                         salary_range=salary_range,
                         experience_level=experience_level,
+                        deep_search=deep_search,
                     )
 
                     st.session_state.crew_result = result
@@ -570,6 +609,7 @@ with col2:
                         "work_type": work_type,
                         "experience_level": experience_level,
                         "salary_range": salary_range,
+                        "deep_search": deep_search,
                         "result": result,
                     }
                     st.session_state.search_history.append(history_entry)
@@ -706,7 +746,7 @@ st.markdown(
     """
     <div style='text-align: center; color: #888; padding: 1rem;'>
         Built with CrewAI, LangChain, Streamlit & Google Gemini<br>
-        <small>Multi-Agent Job Search System v3.0</small>
+        <small>Multi-Agent Job Search System v4.0 (with Deep Search)</small>
     </div>
     """,
     unsafe_allow_html=True,
