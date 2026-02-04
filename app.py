@@ -27,6 +27,7 @@ def get_pdf_text(uploaded_file) -> str:
         text += page.extract_text() or ""
     return text
 
+
 # Load environment variables
 load_dotenv()
 
@@ -71,6 +72,25 @@ st.markdown("""
         background-color: #E8F5E9;
         border: 1px solid #4CAF50;
     }
+    .metric-card {
+        background-color: #f8f9fa;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        border-left: 4px solid #1E88E5;
+        margin-bottom: 1rem;
+    }
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+    }
+    .stTabs [data-baseweb="tab"] {
+        padding: 10px 20px;
+        background-color: #f0f2f6;
+        border-radius: 4px 4px 0 0;
+    }
+    .stTabs [aria-selected="true"] {
+        background-color: #1E88E5;
+        color: white;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -78,14 +98,14 @@ st.markdown("""
 st.markdown('<p class="main-header">🔍 Multi-Agent Job Search System</p>', unsafe_allow_html=True)
 st.markdown('<p class="sub-header">Powered by CrewAI, LangChain & Google Gemini</p>', unsafe_allow_html=True)
 
-# Sidebar for API Keys
+# Sidebar
 with st.sidebar:
     st.header("⚙️ Configuration")
     st.markdown("---")
 
+    # API Keys Section
     st.subheader("🔑 API Keys")
 
-    # Get API keys from environment or user input
     default_gemini_key = os.getenv("GOOGLE_API_KEY", "")
     default_serper_key = os.getenv("SERPER_API_KEY", "")
 
@@ -105,24 +125,61 @@ with st.sidebar:
 
     st.markdown("---")
 
-    st.subheader("📚 How to Get API Keys")
-    st.markdown("""
-    **Google Gemini:**
-    1. Go to [Google AI Studio](https://makersuite.google.com/app/apikey)
-    2. Create a new API key
+    # Job Search Preferences Section
+    st.subheader("🎯 Job Search Preferences")
 
-    **Serper (Google Search):**
-    1. Go to [serper.dev](https://serper.dev)
-    2. Sign up and get your API key
-    """)
+    work_type = st.selectbox(
+        "Work Arrangement",
+        options=["Any", "Remote", "Hybrid", "On-site"],
+        index=0,
+        help="Select your preferred work arrangement",
+    )
+
+    experience_level = st.selectbox(
+        "Experience Level",
+        options=["Any", "Entry Level (0-2 years)", "Mid Level (3-5 years)", "Senior (5-8 years)", "Lead/Principal (8+ years)"],
+        index=0,
+        help="Select your experience level",
+    )
+
+    salary_range = st.selectbox(
+        "Expected Salary Range (USD)",
+        options=[
+            "Not specified",
+            "$40,000 - $60,000",
+            "$60,000 - $80,000",
+            "$80,000 - $100,000",
+            "$100,000 - $130,000",
+            "$130,000 - $160,000",
+            "$160,000 - $200,000",
+            "$200,000+",
+        ],
+        index=0,
+        help="Select your expected salary range",
+    )
 
     st.markdown("---")
 
+    # How to Get API Keys
+    with st.expander("📚 How to Get API Keys"):
+        st.markdown("""
+        **Google Gemini:**
+        1. Go to [Google AI Studio](https://makersuite.google.com/app/apikey)
+        2. Create a new API key
+
+        **Serper (Google Search):**
+        1. Go to [serper.dev](https://serper.dev)
+        2. Sign up and get your API key (2,500 free searches)
+        """)
+
+    st.markdown("---")
+
+    # About Section
     st.subheader("ℹ️ About")
     st.markdown("""
     This system uses 3 AI agents:
     - **Researcher**: Finds relevant jobs
-    - **Profiler**: Analyzes your resume
+    - **Profiler**: Technical recruiter analysis
     - **Writer**: Creates application materials
     """)
 
@@ -154,12 +211,25 @@ with col1:
         with st.expander("Preview extracted text"):
             st.text(resume_text[:2000] + "..." if len(resume_text) > 2000 else resume_text)
 
+    # Display current preferences summary
+    st.markdown("---")
+    st.subheader("📋 Search Summary")
+    pref_col1, pref_col2 = st.columns(2)
+    with pref_col1:
+        st.markdown(f"**Role:** {job_topic or 'Not specified'}")
+        st.markdown(f"**Work Type:** {work_type}")
+    with pref_col2:
+        st.markdown(f"**Experience:** {experience_level}")
+        st.markdown(f"**Salary:** {salary_range}")
+
 with col2:
     st.subheader("🚀 Results")
 
     # Initialize session state for results
     if "crew_result" not in st.session_state:
         st.session_state.crew_result = None
+    if "job_topic_saved" not in st.session_state:
+        st.session_state.job_topic_saved = ""
 
     # Kickoff button
     if st.button("🔥 Kickoff Crew", type="primary"):
@@ -176,43 +246,111 @@ with col2:
             # Run the crew
             with st.spinner("🤖 Agents are working... This may take a few minutes."):
                 try:
-                    st.info("🔍 **Researcher** is searching for jobs...")
+                    # Progress indicators
+                    progress_placeholder = st.empty()
+                    progress_placeholder.info("🔍 **Stage 1/3**: Researcher is searching for jobs...")
 
                     result = create_crew(
                         topic=job_topic,
                         resume_text=resume_text,
                         gemini_key=gemini_api_key,
                         serper_key=serper_api_key,
+                        work_type=work_type,
+                        salary_range=salary_range,
+                        experience_level=experience_level,
                     )
 
                     st.session_state.crew_result = result
-                    st.success("✅ Crew completed successfully!")
+                    st.session_state.job_topic_saved = job_topic
+                    progress_placeholder.empty()
+                    st.success("✅ All agents completed successfully!")
 
                 except Exception as e:
                     st.error(f"❌ An error occurred: {str(e)}")
                     st.exception(e)
 
-    # Display results
+    # Display results in tabs
     if st.session_state.crew_result:
         st.markdown("---")
-        st.subheader("📋 Agent Output")
 
-        # Display the result in a nice format
-        with st.container():
-            st.markdown(st.session_state.crew_result)
+        # Create tabs for organized output
+        tab1, tab2, tab3, tab4 = st.tabs([
+            "📋 Job List",
+            "🔍 Match Analysis",
+            "📝 Final Documents",
+            "📊 Full Report"
+        ])
 
-        st.markdown("---")
+        result = st.session_state.crew_result
 
-        # Download button
-        st.download_button(
-            label="📥 Download Results as Markdown",
-            data=st.session_state.crew_result,
-            file_name=f"job_search_results_{job_topic.replace(' ', '_')}.md",
-            mime="text/markdown",
-        )
+        with tab1:
+            st.subheader("Job Opportunities Found")
+            if result.get("jobs"):
+                st.markdown(result["jobs"])
+            else:
+                st.info("Job search results will appear here.")
 
-        # Copy button alternative
-        st.code(st.session_state.crew_result, language="markdown")
+            st.markdown("---")
+            st.download_button(
+                label="📥 Download Job List",
+                data=result.get("jobs", "No data"),
+                file_name=f"job_list_{st.session_state.job_topic_saved.replace(' ', '_')}.md",
+                mime="text/markdown",
+                key="download_jobs"
+            )
+
+        with tab2:
+            st.subheader("Resume Match Analysis")
+            if result.get("analysis"):
+                st.markdown(result["analysis"])
+            else:
+                st.info("Match analysis will appear here.")
+
+            st.markdown("---")
+            st.download_button(
+                label="📥 Download Analysis",
+                data=result.get("analysis", "No data"),
+                file_name=f"match_analysis_{st.session_state.job_topic_saved.replace(' ', '_')}.md",
+                mime="text/markdown",
+                key="download_analysis"
+            )
+
+        with tab3:
+            st.subheader("Application Documents")
+            if result.get("documents"):
+                st.markdown(result["documents"])
+            else:
+                st.info("Cover letter and resume bullets will appear here.")
+
+            st.markdown("---")
+            st.download_button(
+                label="📥 Download Documents",
+                data=result.get("documents", "No data"),
+                file_name=f"application_docs_{st.session_state.job_topic_saved.replace(' ', '_')}.md",
+                mime="text/markdown",
+                key="download_docs"
+            )
+
+        with tab4:
+            st.subheader("Complete Report")
+            if result.get("full_report"):
+                with st.expander("View Full Report", expanded=True):
+                    st.markdown(result["full_report"])
+            else:
+                st.info("Full report will appear here.")
+
+            st.markdown("---")
+            st.download_button(
+                label="📥 Download Full Report",
+                data=result.get("full_report", "No data"),
+                file_name=f"full_report_{st.session_state.job_topic_saved.replace(' ', '_')}.md",
+                mime="text/markdown",
+                key="download_full"
+            )
+
+        # Raw output option
+        with st.expander("🔧 View Raw Output (Debug)"):
+            st.code(str(result), language="python")
 
 # Footer
 st.markdown("---")
@@ -220,7 +358,7 @@ st.markdown(
     """
     <div style='text-align: center; color: #888; padding: 1rem;'>
         Built with CrewAI, LangChain, Streamlit & Google Gemini<br>
-        <small>Multi-Agent Job Search System v1.0</small>
+        <small>Multi-Agent Job Search System v2.0</small>
     </div>
     """,
     unsafe_allow_html=True,
